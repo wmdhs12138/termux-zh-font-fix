@@ -4,7 +4,7 @@
 
 ## 效果
 
-![效果截图](assets/screenshot.jpg)
+<img src="assets/screenshot.jpg" width="360" alt="ZeroTermux 实机效果" />
 
 （ZeroTermux 实机效果：中文方正、括号/标点位置正常、Nerd 图标完整）
 

@@ -11,7 +11,7 @@
 # ============================================================
 set -euo pipefail
 
-FONT_NAME="SourceCodeProNerdMono-CJK5.ttf"
+FONT_NAME="SourceCodeProNerdMono-CJK7.ttf"
 DEST="$HOME/.termux/font.ttf"
 REPO="https://raw.githubusercontent.com/wmdhs12138/termux-zh-font-fix/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,8 +37,8 @@ if [[ "${1:-}" == "--from-source" ]]; then
     tar xJf /tmp/scp.7z -C /tmp SauceCodeProNerdFontMono-Regular.ttf 2>/dev/null || true
     (command -v 7z >/dev/null && 7z e /tmp/sarasa.7z -o/tmp/sarasa "SarasaTermSC-Regular.ttf" -y >/dev/null) || \
         { echo "缺 7z，请先: pkg install p7zip"; exit 1; }
-    python3 merge_font5.py
-    install_file "SourceCodeProNerdMono-CJK5.ttf"
+    python3 merge_font7.py
+    install_file "SourceCodeProNerdMono-CJK7.ttf"
 elif [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     sed -n '1,12p' "$0"
     exit 0

@@ -2,6 +2,12 @@
 
 **Source Code Pro Nerd Mono（拉丁/Nerd 图标）+ 更纱黑体（CJK）** 混合字体，为 Termux / ZeroTermux 定制，**v7 最终版**。
 
+## 效果
+
+![效果截图](assets/screenshot.jpg)
+
+（ZeroTermux 实机效果：中文方正、括号/标点位置正常、Nerd 图标完整）
+
 ## 为什么有这个字体
 
 Termux 系终端渲染中文"扁"的根因（源码级发现）：

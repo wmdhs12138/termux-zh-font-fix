@@ -1,11 +1,19 @@
 """混合字体 v5：v4 + CJK 缩至 1.1 倍 + 居中留白（字距）——坐标取整版"""
+import sys
+from pathlib import Path
+
 from fontTools.ttLib import TTFont
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.recordingPen import RecordingPen
 
-src = TTFont("/data/data/com.termux/files/home/.cache/SauceCodeProNerdFontMono-Regular.ttf")
-cjk = TTFont("/data/data/com.termux/files/home/.cache/sarasa/SarasaTermSC-Regular.ttf")
+# 源字体路径：优先取命令行参数（install.sh --from-source 会传解压后的临时路径），
+# 否则退回 ~/.cache 下的默认位置。
+SCP = sys.argv[1] if len(sys.argv) > 1 else str(Path.home() / ".cache" / "SauceCodeProNerdFontMono-Regular.ttf")
+CJK = sys.argv[2] if len(sys.argv) > 2 else str(Path.home() / ".cache" / "sarasa" / "SarasaTermSC-Regular.ttf")
+
+src = TTFont(SCP)
+cjk = TTFont(CJK)
 
 cjk_ranges = [
     (0x1100, 0x11FF), (0x2E80, 0x2EFF), (0x3000, 0x303F), (0x3040, 0x30FF),

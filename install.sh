@@ -2,7 +2,7 @@
 # ============================================================
 # Termux / ZeroTermux 混合字体一键安装
 #   Source Code Pro Nerd Mono（拉丁/图标）+ 更纱黑体（CJK）
-#   v5 最终版：CJK 1.1x / advance 1200 / LSB 50 / lineGap 250
+#   v8 最终版：v7（CJK 1.1x / advance 1200 / lineGap 250）+ 20 个 UI 符号字形
 #
 # 用法:
 #   ./install.sh                 # 用仓库内成品字体安装
@@ -11,7 +11,7 @@
 # ============================================================
 set -euo pipefail
 
-FONT_NAME="SourceCodeProNerdMono-CJK7.ttf"
+FONT_NAME="SourceCodeProNerdMono-CJK8.ttf"
 DEST="$HOME/.termux/font.ttf"
 REPO="https://raw.githubusercontent.com/wmdhs12138/termux-zh-font-fix/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,17 +28,22 @@ install_file() {
 }
 
 if [[ "${1:-}" == "--from-source" ]]; then
-    echo "==> 从源字体重新构建（需要网络 + python3 + fonttools）..."
+    echo "==> 从源字体重新构建（需要网络 + python3 + fonttools + p7zip）..."
     command -v python3 >/dev/null || { echo "缺 python3"; exit 1; }
     python3 -c "import fontTools" 2>/dev/null || pip install fonttools
+    command -v 7z >/dev/null || { echo "缺 7z，请先: pkg install p7zip"; exit 1; }
     cd "$SCRIPT_DIR"
-    curl -sL -m 300 -o /tmp/scp.7z https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.0/SourceCodePro.tar.xz
-    curl -sL -m 300 -o /tmp/sarasa.7z https://github.com/be5invis/Sarasa-Gothic/releases/download/v1.0.40/SarasaTermSC-TTF-Unhinted-1.0.40.7z
-    tar xJf /tmp/scp.7z -C /tmp SauceCodeProNerdFontMono-Regular.ttf 2>/dev/null || true
-    (command -v 7z >/dev/null && 7z e /tmp/sarasa.7z -o/tmp/sarasa "SarasaTermSC-Regular.ttf" -y >/dev/null) || \
-        { echo "缺 7z，请先: pkg install p7zip"; exit 1; }
-    python3 merge_font7.py
-    install_file "SourceCodeProNerdMono-CJK7.ttf"
+    # 注意：Termux 下 /tmp 属 shell:shell 不可写，必须走 TMPDIR（= $PREFIX/tmp）
+    TMP="$(mktemp -d)"
+    trap 'rm -rf "$TMP"' EXIT
+    echo "==> 临时目录: $TMP"
+    curl -sL -m 300 -o "$TMP/scp.tar.xz" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.0/SourceCodePro.tar.xz
+    curl -sL -m 300 -o "$TMP/sarasa.7z" https://github.com/be5invis/Sarasa-Gothic/releases/download/v1.0.40/SarasaTermSC-TTF-Unhinted-1.0.40.7z
+    tar xJf "$TMP/scp.tar.xz" -C "$TMP" SauceCodeProNerdFontMono-Regular.ttf
+    7z e "$TMP/sarasa.7z" -o"$TMP/sarasa" "SarasaTermSC-Regular.ttf" -y >/dev/null
+    python3 merge_font7.py "$TMP/SauceCodeProNerdFontMono-Regular.ttf" "$TMP/sarasa/SarasaTermSC-Regular.ttf"
+    python3 patch_symbols8.py
+    install_file "SourceCodeProNerdMono-CJK8.ttf"
 elif [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     sed -n '1,12p' "$0"
     exit 0

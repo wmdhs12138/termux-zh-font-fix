@@ -1,10 +1,10 @@
-"""从已安装的 Termux（含 NewTermux 等 fork）APK 里解出 WcWidth 的两张区间表，写入 termux_wcwidth.json。
+"""从已安装的 Termux（含 NewTermux 等 fork）APK 里解出 WcWidth 的两张区间表，写入 build/termux_wcwidth.json。
 
 Termux 渲染时字形 advance ≠ wcwidth×列宽 就会横向缩放，所以字体的宽度必须对齐 app 自己的表，
 而不是 Python/系统的 Unicode 表（版本不同，比如 Unicode 16 把 ☰ 等改成了宽字符）。
 表是 D8 编进 WcWidth.<clinit> 的 filled-new-array 常量，这里直接线性解码字节码取出。
 
-用法：python3 extract_wcwidth.py [base.apk]   （缺省用 `pm path com.termux` 找）
+用法：python3 tools/extract_wcwidth.py [base.apk]   （缺省用 `pm path com.termux` 找）
 """
 import json
 import struct
@@ -13,7 +13,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent / "termux_wcwidth.json"
+OUT = Path(__file__).resolve().parent.parent / "build" / "termux_wcwidth.json"
 CLASS = "Lcom/termux/terminal/WcWidth;"
 # <clinit> 里会出现的指令长度（16-bit 单元）
 SIZE = {0x00: 1, 0x01: 1, 0x02: 2, 0x07: 1, 0x08: 2, 0x0c: 1, 0x0e: 1, 0x12: 1, 0x13: 2, 0x14: 3,

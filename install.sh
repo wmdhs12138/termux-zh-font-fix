@@ -1,29 +1,26 @@
 #!/usr/bin/env bash
 # ============================================================
-# Termux / ZeroTermux 混合字体一键安装
-#   Source Code Pro Nerd Mono（拉丁/图标）+ 更纱黑体（CJK）
-#   v9：v8 + 行内垂直居中 / 制表符方块铺满无断缝 / 宽度对齐 Termux wcwidth / 补常用符号与 CJK 边角字
+# Termux / ZeroTermux / NewTermux 中文混合字体一键安装
+#   Source Code Pro Nerd Mono（拉丁/图标）+ 更纱黑体（CJK）+ 符号补全
 #
 # 用法:
-#   ./install.sh                 # 用仓库内成品字体安装
-#   ./install.sh --from-source   # 从源字体重新合并构建（需 python3+fonttools）
+#   ./install.sh                 # 安装仓库里的成品（本地没有就从 GitHub 下载）
+#   ./install.sh --from-source   # 从源字体重新构建再安装（python3 + fonttools + p7zip）
 #   ./install.sh --help
 # ============================================================
 set -euo pipefail
 
-FONT_NAME="SourceCodeProNerdMono-CJK9.ttf"
+FONT_NAME="SourceCodeProNerdMono-CJK.ttf"
 DEST="$HOME/.termux/font.ttf"
 REPO="https://raw.githubusercontent.com/wmdhs12138/termux-zh-font-fix/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-echo "==> 目标: $DEST"
-mkdir -p "$(dirname "$DEST")"
 
 install_file() {
     # 必须"写临时文件 + rename"原子替换：Termux 是 mmap 着 font.ttf 渲染的，
     # cp/curl -o 原地截断重写会让正在运行的 app 读到被改掉的映射页，当场 SIGSEGV/SIGBUS 闪退。
     # rename 后旧 inode 仍被 app 持有，照常渲染，直到重启才换成新字体。
     local src="$1" tmp="$DEST.new.$$"
+    mkdir -p "$(dirname "$DEST")"
     cp "$src" "$tmp"
     if [[ "$(head -c 4 "$tmp" | od -An -tx1 | tr -d ' ')" != "00010000" ]]; then
         rm -f "$tmp"
@@ -32,30 +29,17 @@ install_file() {
     fi
     mv -f "$tmp" "$DEST"
     echo "==> 已安装: $DEST ($(du -h "$DEST" | cut -f1))"
-    echo "==> 请【完全退出】Termux/ZeroTermux（最近任务划掉）后重新打开生效"
-    echo "==> 注意：更换字体后若中文变扁/行距异常，重启 app 即可（进程级字体缓存）"
+    echo "==> 字体是进程级缓存：【完全退出】Termux（最近任务里划掉）再打开才生效"
 }
 
 if [[ "${1:-}" == "--from-source" ]]; then
-    echo "==> 从源字体重新构建（需要网络 + python3 + fonttools + p7zip）..."
+    echo "==> 从源字体重新构建（首次需下载约 60MB）..."
     command -v python3 >/dev/null || { echo "缺 python3"; exit 1; }
     python3 -c "import fontTools" 2>/dev/null || pip install fonttools
-    command -v 7z >/dev/null || { echo "缺 7z，请先: pkg install p7zip"; exit 1; }
-    cd "$SCRIPT_DIR"
-    # 注意：Termux 下 /tmp 属 shell:shell 不可写，必须走 TMPDIR（= $PREFIX/tmp）
-    TMP="$(mktemp -d)"
-    trap 'rm -rf "$TMP"' EXIT
-    echo "==> 临时目录: $TMP"
-    curl -sL -m 300 -o "$TMP/scp.tar.xz" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.0/SourceCodePro.tar.xz
-    curl -sL -m 300 -o "$TMP/sarasa.7z" https://github.com/be5invis/Sarasa-Gothic/releases/download/v1.0.40/SarasaTermSC-TTF-Unhinted-1.0.40.7z
-    tar xJf "$TMP/scp.tar.xz" -C "$TMP" SauceCodeProNerdFontMono-Regular.ttf
-    7z e "$TMP/sarasa.7z" -o"$TMP/sarasa" "SarasaTermSC-Regular.ttf" -y >/dev/null
-    python3 merge_font7.py "$TMP/SauceCodeProNerdFontMono-Regular.ttf" "$TMP/sarasa/SarasaTermSC-Regular.ttf"
-    python3 patch_symbols8.py
-    python3 patch_v9.py
-    install_file "$FONT_NAME"
+    python3 "$SCRIPT_DIR/build/build.py"
+    install_file "$SCRIPT_DIR/$FONT_NAME"
 elif [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    sed -n '1,12p' "$0"
+    sed -n '2,10p' "$0"
     exit 0
 elif [[ -f "$SCRIPT_DIR/$FONT_NAME" ]]; then
     # 本地仓库内有成品

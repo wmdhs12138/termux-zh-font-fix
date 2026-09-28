@@ -1,32 +1,20 @@
-"""混合字体 v9：在 v8 基础上修正 Termux 渲染层暴露出的几类问题。
+"""第 3 步：让字形与 Termux 的 TerminalRenderer 严丝合缝（前两步的产物在 Termux 里仍有这些问题）。
 
-1. 行高 1430 不变，但把 lineGap 250 平分进 ascent/descent（965/-215 → 1090/-340）。
-   Termux 的 TerminalRenderer 把 leading 整块放在行底，v8 的文字贴着行顶，
-   选区、背景色行、光标块下能看出文字偏上。
-2. 制表符 / 方块元素 / Powerline 分隔符纵向拉伸，铺满新行高，上下各多出 OVERLAP。
-   v8 改了行高却没动这些字形：│ █ 只有 1400 高（行高 1430），加上 Termux 对行高 ceil() 取整，
-   31px 字号下行与行之间断开约 1.6px；Powerline 箭头按原 1257 行高设计，比色块矮一截。
-3. CJK 字形整体右移 CJK_SHIFT，恢复 v5 设计的左右各 50 留白。
-   v7 把 lsb 改成真实 xMin 时，原先靠 lsb=50 实现的平移也一起没了，中文在 2 格里偏左。
-4. advance 与 Termux 的 wcwidth 对齐（表从 NewTermux 的 WcWidth.<clinit> 字节码解出，
-   存于 termux_wcwidth.json）。advance ≠ wcwidth×600 时 Termux 会整段横向缩放：
-   - wcwidth=1 却按 1200 合入的半角片假名/半角符号/谚文中终声 → 收窄到单格
-   - wcwidth=2 的 emoji 只有单格字形（⏰⬜☕⚡🎵🎶💩🔒🤖）→ 删映射，交给系统彩色 emoji
-   - 组合用浊点/声调符号（wcwidth=0）→ advance 归零
-5. 补常用符号区（✔✘★☆※℃①Ⅰ↩➜⌥⇧⏎ …）里缺的 wcwidth=1 字形，DejaVu Sans Mono 优先。
-6. 补 CJK 边角区（谚文兼容字母、注音扩展、IDS、竖排/小写变体、扩展 B+）：取系统
-   Noto Sans CJK SC（与更纱同为思源黑体字形），处理同 merge_font7；
+1. 行高：总高 1430，全部放进 ascent/descent（1090/-340）、lineGap 为 0。
+   TerminalRenderer 把 leading 整块放在行底，lineGap 非 0 时文字会贴着行顶。
+2. 制表符 / 方块元素 / Powerline 分隔符纵向拉伸铺满行高，上下各多出 OVERLAP。
+   Termux 行高是 ceil() 取整的，字形只"刚好铺满"也会在行与行之间留下亚像素缝。
+3. advance 对齐 Termux 的 wcwidth（见 termux_wcwidth.py），不一致就会被整字横向缩放：
+   - wcwidth=1 却按 2 格合入的半角片假名 / 半角符号 / 谚文中终声 → 收窄到单格
+   - wcwidth=2 却只有单格字形的 emoji（⏰⬜☕⚡🎵🎶💩🔒🤖）→ 删映射，交给系统彩色 emoji
+   - 组合用浊点 / 声调符号（wcwidth=0）→ advance 归零
+4. 补齐常用符号区里缺的 wcwidth=1 字形（✔✘★☆※℃①Ⅰ↩➜⌥⇧⏎ …），DejaVu Sans Mono 优先。
+5. 补 CJK 边角区（谚文兼容字母、注音扩展、IDS、竖排 / 小写变体、扩展 B+）：取系统
+   Noto Sans CJK SC（与更纱同为思源黑体字形），缩放和居中与第 1 步相同；
    康熙部首、兼容表意补充按 NFKC 直接复用已有字形。
-
-用法：python3 patch_v9.py   （需同目录有 SourceCodeProNerdMono-CJK8.ttf）
 """
-import bisect
-import json
 import os
-import sys
 import unicodedata
-import zipfile
-from pathlib import Path
 
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.cu2quPen import Cu2QuPen
@@ -35,19 +23,12 @@ from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTCollection, TTFont
 
-import patch_symbols8 as p8
-
-HERE = Path(__file__).resolve().parent
-V8 = HERE / "SourceCodeProNerdMono-CJK8.ttf"
-OUT = HERE / "SourceCodeProNerdMono-CJK9.ttf"
-WCWIDTH = HERE / "termux_wcwidth.json"
-SYS_CJK = "/system/fonts/NotoSansCJK-Regular.ttc"
+from step1_merge_cjk import MARGIN as CJK_MARGIN, SCALE as CJK_SCALE
+from termux_wcwidth import wcwidth
 
 CELL = 600
-ASC, DESC = 1090, -340      # 行高仍是 1430，只是 lineGap 挪进来让文字居中
+ASC, DESC = 1090, -340      # 行高 = ASC - DESC = 1430；想调行距改这里
 OVERLAP = 20                # 铺满类字形上下越界量，盖住 Termux 行高 ceil() 取整留下的缝
-CJK_SCALE = 1.1
-CJK_SHIFT = 50              # 1.1× 后 em 框宽 1100，右移 50 居中于 1200
 SYM_W, SYM_H = 560, 820     # 补入符号的墨迹上限（单格）
 REF_CAP = 656               # SCP 的 H 高，补入符号按源字体大写高度对齐到它
 
@@ -64,28 +45,6 @@ CJK_EXTRA_BLOCKS = [
     (0x31F0, 0x31FF), (0xFE10, 0xFE1F), (0xFE50, 0xFE6F), (0x20000, 0x3FFFD),
 ]
 NFKC_ALIAS_BLOCKS = [(0x2F00, 0x2FD5), (0x2F800, 0x2FA1D)]
-
-# ---- Termux wcwidth（com.termux.terminal.WcWidth.width 的移植） ----
-_ZERO, _WIDE = json.loads(WCWIDTH.read_text())
-_ZERO_LO = [a for a, _ in _ZERO]
-_WIDE_LO = [a for a, _ in _WIDE]
-
-
-def _intable(table, starts, cp):
-    i = bisect.bisect_right(starts, cp) - 1
-    return i >= 0 and cp <= table[i][1]
-
-
-def wcwidth(cp):
-    if (cp == 0 or cp == 0x034F or 0x200B <= cp <= 0x200F or cp in (0x2028, 0x2029)
-            or 0x202A <= cp <= 0x202E or 0x2060 <= cp <= 0x2063):
-        return 0
-    if cp < 32 or 0x7F <= cp < 0xA0:
-        return 0
-    if _intable(_ZERO, _ZERO_LO, cp):
-        return 0
-    return 2 if _intable(_WIDE, _WIDE_LO, cp) else 1
-
 
 # ---- 字形工具 ----
 def record(glyphset, name, m):
@@ -172,19 +131,6 @@ def fix_cell_fillers(t):
     return len(box), pl
 
 
-def shift_cjk(t):
-    n = 0
-    for name in t.font.getGlyphOrder():
-        if name.startswith("cjk"):
-            g = t.glyf[name]
-            if g.numberOfContours > 0:
-                g.coordinates.translate((CJK_SHIFT, 0))
-                g.recalcBounds(t.glyf)
-                t.hmtx[name] = (t.hmtx[name][0], g.xMin)
-                n += 1
-    return n
-
-
 def fix_widths(t):
     narrowed, dropped, zeroed = [], [], []
     for cp, name in sorted(t.cmap.items()):
@@ -207,17 +153,6 @@ def fix_widths(t):
             t.hmtx[name] = (0, t.hmtx[name][1])
             zeroed.append(cp)
     return narrowed, dropped, zeroed
-
-
-def symbol_sources():
-    cache = p8.CACHE
-    chain = [(label, f) for label, f in p8.ensure_sources()]
-    mono = cache / "DejaVuSansMono.ttf"
-    if not mono.exists():
-        with zipfile.ZipFile(cache / "dejavu-fonts-ttf-2.37.zip") as z:
-            mono.write_bytes(z.read(next(n for n in z.namelist() if n.endswith("/DejaVuSansMono.ttf"))))
-    chain.insert(0, ("DejaVuSansMono", TTFont(mono)))
-    return chain
 
 
 def cap_scale(src):
@@ -252,13 +187,12 @@ def add_symbols(t, chain):
     return added
 
 
-def add_cjk_extras(t):
-    if not os.path.exists(SYS_CJK):
-        print(f"  跳过 CJK 补字：没有 {SYS_CJK}")
-        return []
-    sc = next(f for f in TTCollection(SYS_CJK, lazy=True).fonts if "SC" in f["name"].getDebugName(4))
+def add_cjk_extras(t, sys_cjk):
+    if not os.path.exists(sys_cjk):
+        return None
+    sc = next(f for f in TTCollection(sys_cjk, lazy=True).fonts if "SC" in f["name"].getDebugName(4))
     cm, gs = sc.getBestCmap(), sc.getGlyphSet()
-    m = (CJK_SCALE, 0, 0, CJK_SCALE, CJK_SHIFT, 0)
+    m = (CJK_SCALE, 0, 0, CJK_SCALE, CJK_MARGIN, 0)
     added = []
     for lo, hi in CJK_EXTRA_BLOCKS:
         for cp in range(lo, hi + 1):
@@ -281,7 +215,29 @@ def add_nfkc_aliases(t):
     return n
 
 
-def audit(t):
+def run(in_path, out_path, symbol_sources, sys_cjk, timestamp):
+    """symbol_sources：[(标签, TTFont), ...] 按优先级；sys_cjk：系统 Noto Sans CJK 的 ttc 路径；
+    timestamp：写入 head.modified 的固定值，让同样的输入构建出逐字节相同的字体"""
+    t = Target(in_path)
+    fix_metrics(t)
+    box, pl = fix_cell_fillers(t)
+    narrowed, dropped, zeroed = fix_widths(t)
+    symbols = add_symbols(t, symbol_sources)
+    extras = add_cjk_extras(t, sys_cjk)
+    aliases = add_nfkc_aliases(t)
+
+    for tb in t.font["cmap"].tables:
+        tb.cmap = dict(sorted(tb.cmap.items()))
+    t.font.recalcTimestamp = False
+    t.font["head"].modified = timestamp
+    t.font.save(out_path)
+    return dict(box=box, powerline=pl, narrowed=narrowed, dropped=dropped, zeroed=zeroed,
+                symbols=symbols, cjk_extras=extras, nfkc_aliases=aliases)
+
+
+def audit(path):
+    """返回 advance 与 Termux wcwidth 不一致的码位"""
+    t = Target(path)
     bad = []
     for cp, name in t.cmap.items():
         if cp < 0x20 or 0x300 <= cp <= 0x36F:
@@ -290,40 +246,3 @@ def audit(t):
         if (w == 0 and adv) or (w and abs(adv - w * CELL) > 6):
             bad.append(cp)
     return bad
-
-
-def main():
-    if not V8.exists():
-        sys.exit(f"缺 {V8.name}——请先跑 patch_symbols8.py（或从仓库取成品）")
-    t = Target(V8)
-    print("准备源字体...")
-    chain = symbol_sources()
-
-    fix_metrics(t)
-    box, pl = fix_cell_fillers(t)
-    print(f"行高度量 → ascent {ASC} / descent {DESC} / lineGap 0；拉伸制表/方块 {box} 个、Powerline {pl} 个")
-    print(f"CJK 右移 {CJK_SHIFT}：{shift_cjk(t)} 个字形")
-
-    narrowed, dropped, zeroed = fix_widths(t)
-    print(f"收窄为单格 {len(narrowed)} 个：{''.join(chr(c) for c in narrowed[:40])}…")
-    print(f"去掉单格 emoji 映射 {len(dropped)} 个：{''.join(chr(c) for c in dropped)}")
-    print(f"组合符号 advance 归零 {len(zeroed)} 个：{' '.join(f'U+{c:04X}' for c in zeroed)}")
-
-    added = add_symbols(t, chain)
-    for label, cps in added.items():
-        print(f"补符号 {len(cps):>4} 个 ← {label}: {''.join(chr(c) for c in cps[:50])}{'…' if len(cps) > 50 else ''}")
-    extras = add_cjk_extras(t)
-    print(f"补 CJK 边角字 {len(extras)} 个 ← Noto Sans CJK SC")
-    print(f"康熙部首/兼容补充按 NFKC 复用 {add_nfkc_aliases(t)} 个")
-
-    for tb in t.font["cmap"].tables:
-        tb.cmap = dict(sorted(tb.cmap.items()))
-    t.font.save(OUT)
-
-    bad = audit(Target(OUT))
-    print(f"v9 已保存: {OUT.name} | 字形 {len(t.font.getGlyphOrder())} | {OUT.stat().st_size / 1e6:.1f}MB")
-    print("宽度审计:", "全部与 Termux wcwidth 一致" if not bad else f"仍有 {len(bad)} 个不一致: {bad[:20]}")
-
-
-if __name__ == "__main__":
-    main()

@@ -2,7 +2,7 @@
 # ============================================================
 # Termux / ZeroTermux 混合字体一键安装
 #   Source Code Pro Nerd Mono（拉丁/图标）+ 更纱黑体（CJK）
-#   v8 最终版：v7（CJK 1.1x / advance 1200 / lineGap 250）+ 20 个 UI 符号字形
+#   v9：v8 + 行内垂直居中 / 制表符方块铺满无断缝 / 宽度对齐 Termux wcwidth / 补常用符号与 CJK 边角字
 #
 # 用法:
 #   ./install.sh                 # 用仓库内成品字体安装
@@ -11,7 +11,7 @@
 # ============================================================
 set -euo pipefail
 
-FONT_NAME="SourceCodeProNerdMono-CJK8.ttf"
+FONT_NAME="SourceCodeProNerdMono-CJK9.ttf"
 DEST="$HOME/.termux/font.ttf"
 REPO="https://raw.githubusercontent.com/wmdhs12138/termux-zh-font-fix/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,8 +20,17 @@ echo "==> 目标: $DEST"
 mkdir -p "$(dirname "$DEST")"
 
 install_file() {
-    local src="$1"
-    cp "$src" "$DEST"
+    # 必须"写临时文件 + rename"原子替换：Termux 是 mmap 着 font.ttf 渲染的，
+    # cp/curl -o 原地截断重写会让正在运行的 app 读到被改掉的映射页，当场 SIGSEGV/SIGBUS 闪退。
+    # rename 后旧 inode 仍被 app 持有，照常渲染，直到重启才换成新字体。
+    local src="$1" tmp="$DEST.new.$$"
+    cp "$src" "$tmp"
+    if [[ "$(head -c 4 "$tmp" | od -An -tx1 | tr -d ' ')" != "00010000" ]]; then
+        rm -f "$tmp"
+        echo "==> $src 不是 TrueType 字体，已放弃安装"
+        exit 1
+    fi
+    mv -f "$tmp" "$DEST"
     echo "==> 已安装: $DEST ($(du -h "$DEST" | cut -f1))"
     echo "==> 请【完全退出】Termux/ZeroTermux（最近任务划掉）后重新打开生效"
     echo "==> 注意：更换字体后若中文变扁/行距异常，重启 app 即可（进程级字体缓存）"
@@ -43,7 +52,8 @@ if [[ "${1:-}" == "--from-source" ]]; then
     7z e "$TMP/sarasa.7z" -o"$TMP/sarasa" "SarasaTermSC-Regular.ttf" -y >/dev/null
     python3 merge_font7.py "$TMP/SauceCodeProNerdFontMono-Regular.ttf" "$TMP/sarasa/SarasaTermSC-Regular.ttf"
     python3 patch_symbols8.py
-    install_file "SourceCodeProNerdMono-CJK8.ttf"
+    python3 patch_v9.py
+    install_file "$FONT_NAME"
 elif [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     sed -n '1,12p' "$0"
     exit 0
@@ -53,7 +63,8 @@ elif [[ -f "$SCRIPT_DIR/$FONT_NAME" ]]; then
 else
     # 直接从 GitHub 下载成品（迁移场景：机器上什么都没有）
     echo "==> 本地无成品，从 GitHub 下载..."
-    curl -sL -m 120 -o "$DEST" "$REPO/$FONT_NAME"
-    echo "==> 已下载安装: $DEST ($(du -h "$DEST" | cut -f1))"
-    echo "==> 请【完全退出】Termux/ZeroTermux 后重新打开生效"
+    DL="$(mktemp)"
+    trap 'rm -f "$DL"' EXIT
+    curl -fsSL -m 120 -o "$DL" "$REPO/$FONT_NAME"
+    install_file "$DL"
 fi

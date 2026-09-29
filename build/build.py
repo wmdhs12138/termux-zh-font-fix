@@ -33,7 +33,7 @@ PRODUCT = ROOT / "SourceCodeProNerdMono-CJK.ttf"
 CACHE = Path.home() / ".cache" / "termux-zh-font-fix"
 
 # 写进 head.modified 的固定时间（UTC）：同样的源字体和参数必然构建出逐字节相同的字体。发新版时改成当天。
-FONT_TIMESTAMP = "Mon Sep 28 15:44:59 2026"
+FONT_TIMESTAMP = "Tue Sep 29 07:24:39 2026"
 
 # 下载地址锁定到具体版本 / commit 并校验 sha256，上游更新不会悄悄改变构建结果
 SOURCES = {
@@ -153,6 +153,7 @@ def main():
     else:
         print(f"      补 CJK 边角字 {len(r['cjk_extras'])} 个 ← Noto Sans CJK SC")
     print(f"      康熙部首 / 兼容补充按 NFKC 复用 {r['nfkc_aliases']} 个")
+    print(f"      双格字形拆成 单格字形 + 单格空白 {r['split']} 个（GSUB ccmp）")
 
     bad = fit.audit(out)
     glyphs = TTFont(out, lazy=True)["maxp"].numGlyphs

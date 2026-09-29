@@ -6,7 +6,16 @@
 git show v8:SourceCodeProNerdMono-CJK8.ttf > v8.ttf
 ```
 
-各标签里的文件名：`v5` → `SourceCodeProNerdMono-CJK5.ttf`，`v7` → `…-CJK7.ttf`，`v8` → `…-CJK8.ttf`，`v9` → `…-CJK9.ttf`。
+各标签里的文件名：`v5` → `SourceCodeProNerdMono-CJK5.ttf`，`v7` → `…-CJK7.ttf`，`v8` → `…-CJK8.ttf`，`v9` → `…-CJK9.ttf`，`v10` 起不带版本号：`SourceCodeProNerdMono-CJK.ttf`。
+
+## v10（2026-09-29）对齐真机渲染器：方块无缝、中文任何字号都恰好两格
+
+之前都是按 TerminalRenderer 源码离线推算的，这次用 `app_process` 调 Android 自己的文字渲染实测，发现 Android 默认开着 hinting，**每个字形的宽度会各自取整到整像素**（37 号列宽 22px 而非 22.2px），由此修正两个问题：
+
+- Claude Code 开屏形象、进度条等方块字在不同缩放下出现竖条纹（14–60 号里 18 个字号）或横条纹（11 个字号）：列宽向上取整时方块右边空出最多 0.4px；小字号时行高取整多出的近 1px 盖不住 → 方块右边多伸出 30 units，制表符和方块底边多伸出 40 units。实测只剩 14 号有一条很淡的横线
+- 中文在 19 个字号下被横向缩放 2.5%–6%：双格字 `round(1.2em)` 与两个单格 `2 × round(0.6em)` 差 1px（31 号是 37 对 38px），超过 Termux 1% 的容差 → 双格字形 advance 改为一格，在 GSUB 已有的 ccmp 末尾追加"字形 → 字形 + 单格空白"，排版后恰好两格
+- 新增 `tools/android_check.py`：在手机上用真实渲染器逐个字号检查方块、制表符缝隙和中文宽度，另存开屏形象和混排样例图
+- `tools/preview.py` 的模拟改为宽度取整、双格字按拆分计宽，与真机一致
 
 ## 2026-09-29 项目整理（字体内容不变）
 

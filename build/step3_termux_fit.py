@@ -4,6 +4,10 @@
    TerminalRenderer 把 leading 整块放在行底，lineGap 非 0 时文字会贴着行顶。
 2. 制表符 / 方块元素 / Powerline 分隔符纵向拉伸铺满行高，上下各多出 OVERLAP。
    Termux 行高是 ceil() 取整的，字形只"刚好铺满"也会在行与行之间留下亚像素缝。
+   制表符和方块的底边再多伸出 BOTTOM_EXTRA：小字号时取整多出的近 1px，只靠 OVERLAP 盖不住。
+   方块右边再多伸出 BLOCK_BLEED：Android 默认开 hinting，advance 被取整成整像素（37 号列宽 22px 而非 22.2px），
+   方块墨迹却还是 0.6em 宽，向上取整时格子右边空出最多 0.4px，就成了竖条纹。
+   这些量由 tools/android_check.py 在真机渲染器上逐个字号验证过。
 3. advance 对齐 Termux 的 wcwidth（见 termux_wcwidth.py），不一致就会被整字横向缩放：
    - wcwidth=1 却按 2 格合入的半角片假名 / 半角符号 / 谚文中终声 → 收窄到单格
    - wcwidth=2 却只有单格字形的 emoji（⏰⬜☕⚡🎵🎶💩🔒🤖）→ 删映射，交给系统彩色 emoji
@@ -12,16 +16,22 @@
 5. 补 CJK 边角区（谚文兼容字母、注音扩展、IDS、竖排 / 小写变体、扩展 B+）：取系统
    Noto Sans CJK SC（与更纱同为思源黑体字形），缩放和居中与第 1 步相同；
    康熙部首、兼容表意补充按 NFKC 直接复用已有字形。
+6. 双格字形拆成"单格字形 + 单格空白"：Android 把每个字形的 advance 各自取整成整像素，双格字的 round(1.2em)
+   不一定等于两个单格的 2×round(0.6em)（31 号是 37px 对 38px），差 1px 就超过 Termux 1% 的容差、整字被横向缩放。
+   所以双格字形的 advance 改为一格，再在 GSUB 已有的 ccmp（所有文种默认启用）末尾追加多重替换
+   "字形 → 字形 + SPACER"。HarfBuzz 排版后宽度是两个取整后的单格，任何字号都恰好两格；墨迹不动，照常画满两格。
 """
 import os
 import unicodedata
 
+from fontTools.otlLib.builder import buildLookup, buildMultipleSubstSubtable
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.cu2quPen import Cu2QuPen
 from fontTools.pens.recordingPen import DecomposingRecordingPen, RecordingPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTCollection, TTFont
+from fontTools.ttLib.tables._g_l_y_f import GlyphCoordinates
 
 from step1_merge_cjk import MARGIN as CJK_MARGIN, SCALE as CJK_SCALE
 from termux_wcwidth import wcwidth
@@ -29,6 +39,10 @@ from termux_wcwidth import wcwidth
 CELL = 600
 ASC, DESC = 1090, -340      # 行高 = ASC - DESC = 1430；想调行距改这里
 OVERLAP = 20                # 铺满类字形上下越界量，盖住 Termux 行高 ceil() 取整留下的缝
+BOTTOM_EXTRA = 40           # 制表符、方块底边再多伸出的量（多出的部分会被后画的下一行盖住，所以加在底边）
+BLOCK_BLEED = 30            # 方块元素右边越界量，盖住列宽向上取整留下的缝
+SHADES = (0x2591, 0x2592, 0x2593)  # ░▒▓ 是点阵图案、本来就伸出格子，不做上面两项外扩
+SPACER = "cell.spacer"      # 双格字形拆分后补在后面的单格空白字形
 SYM_W, SYM_H = 560, 820     # 补入符号的墨迹上限（单格）
 REF_CAP = 656               # SCP 的 H 高，补入符号按源字体大写高度对齐到它
 
@@ -111,6 +125,16 @@ def fix_metrics(t):
     o.usWinAscent, o.usWinDescent = ASC + OVERLAP, -DESC + OVERLAP
 
 
+def bleed(t, name, right):
+    """底边上的点再往下移 BOTTOM_EXTRA，贴格子右边的点再往右移 right；只动边缘，中线、半格分界等内部位置不变"""
+    g = t.glyf[name]
+    lo = DESC - OVERLAP
+    g.coordinates = GlyphCoordinates([(x + right if x >= CELL - 0.5 else x,
+                                       y - BOTTOM_EXTRA if y <= lo + 0.5 else y) for x, y in g.coordinates])
+    g.recalcBounds(t.glyf)
+    t.hmtx[name] = (t.hmtx[name][0], g.xMin)
+
+
 def fix_cell_fillers(t):
     names = set()
     box = [c for c in list(range(0x2500, 0x25A0)) + [0x2320, 0x2321] if c in t.cmap]
@@ -119,6 +143,8 @@ def fix_cell_fillers(t):
         if t.cmap[cp] not in names:
             names.add(t.cmap[cp])
             t.redraw(t.cmap[cp], m)
+            if cp not in SHADES:
+                bleed(t, t.cmap[cp], BLOCK_BLEED if 0x2580 <= cp <= 0x259F else 0)
     pl = 0
     m = stretch_matrix(*PL_SRC)
     for cp in range(0xE0B0, 0xE0D8):
@@ -215,6 +241,42 @@ def add_nfkc_aliases(t):
     return n
 
 
+def split_wide(t):
+    """双格字形 advance 改为一格，GSUB 的 ccmp 末尾追加 字形 → 字形 + SPACER（见文件头第 6 条）"""
+    wide = [n for n in t.font.getGlyphOrder() if t.hmtx[n][0] == 2 * CELL]
+    t.put(SPACER, TTGlyphPen(None).glyph(), CELL)
+    if SPACER not in t.font.getGlyphOrder():  # 给 glyf 赋值时通常已经加进字形顺序了
+        t.font.setGlyphOrder(t.font.getGlyphOrder() + [SPACER])
+    for n in wide:
+        t.hmtx[n] = (CELL, t.hmtx[n][1])
+    gsub = t.font["GSUB"].table
+    gsub.LookupList.Lookup.append(buildLookup([buildMultipleSubstSubtable({n: [n, SPACER] for n in wide})]))
+    gsub.LookupList.LookupCount = len(gsub.LookupList.Lookup)
+    # 要挂在已有的 ccmp 上：同一个 LangSys 里有两个 ccmp 时，HarfBuzz 只用第一个
+    ccmp = [i for i, r in enumerate(gsub.FeatureList.FeatureRecord) if r.FeatureTag == "ccmp"]
+    for sr in gsub.ScriptList.ScriptRecord:
+        for ls in [sr.Script.DefaultLangSys] + [r.LangSys for r in sr.Script.LangSysRecord]:
+            if ls and not set(ls.FeatureIndex) & set(ccmp):
+                raise ValueError(f"GSUB 文种 {sr.ScriptTag} 没有 ccmp，拆分在这个文种下不会生效")
+    for i in ccmp:
+        feature = gsub.FeatureList.FeatureRecord[i].Feature
+        feature.LookupListIndex.append(gsub.LookupList.LookupCount - 1)
+        feature.LookupCount = len(feature.LookupListIndex)
+    return len(wide)
+
+
+def split_glyphs(font):
+    """GSUB 里被替换成 字形 + SPACER 的字形：排版后宽度比 advance 多一格"""
+    out = set()
+    for lookup in font["GSUB"].table.LookupList.Lookup if "GSUB" in font else []:
+        for st in lookup.SubTable:
+            kind = st.ExtensionLookupType if lookup.LookupType == 7 else lookup.LookupType
+            st = st.ExtSubTable if lookup.LookupType == 7 else st
+            if kind == 2:
+                out |= {g for g, seq in st.mapping.items() if seq == [g, SPACER]}
+    return out
+
+
 def run(in_path, out_path, symbol_sources, sys_cjk, timestamp):
     """symbol_sources：[(标签, TTFont), ...] 按优先级；sys_cjk：系统 Noto Sans CJK 的 ttc 路径；
     timestamp：写入 head.modified 的固定值，让同样的输入构建出逐字节相同的字体"""
@@ -225,6 +287,7 @@ def run(in_path, out_path, symbol_sources, sys_cjk, timestamp):
     symbols = add_symbols(t, symbol_sources)
     extras = add_cjk_extras(t, sys_cjk)
     aliases = add_nfkc_aliases(t)
+    split = split_wide(t)
 
     for tb in t.font["cmap"].tables:
         tb.cmap = dict(sorted(tb.cmap.items()))
@@ -232,17 +295,18 @@ def run(in_path, out_path, symbol_sources, sys_cjk, timestamp):
     t.font["head"].modified = timestamp
     t.font.save(out_path)
     return dict(box=box, powerline=pl, narrowed=narrowed, dropped=dropped, zeroed=zeroed,
-                symbols=symbols, cjk_extras=extras, nfkc_aliases=aliases)
+                symbols=symbols, cjk_extras=extras, nfkc_aliases=aliases, split=split)
 
 
 def audit(path):
-    """返回 advance 与 Termux wcwidth 不一致的码位"""
+    """返回排版宽度（advance，拆分过的双格字形再加一格）与 Termux wcwidth 不一致的码位"""
     t = Target(path)
+    split = split_glyphs(t.font)
     bad = []
     for cp, name in t.cmap.items():
         if cp < 0x20 or 0x300 <= cp <= 0x36F:
             continue
-        w, adv = wcwidth(cp), t.hmtx[name][0]
+        w, adv = wcwidth(cp), t.hmtx[name][0] + (CELL if name in split else 0)
         if (w == 0 and adv) or (w and abs(adv - w * CELL) > 6):
             bad.append(cp)
     return bad

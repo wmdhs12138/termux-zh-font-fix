@@ -29,11 +29,14 @@ Termux 的 `TerminalRenderer` 逐字测量宽度，和 `wcwidth` 算出的格数
 
 | Termux 的行为 | 字体的对策 |
 |---|---|
-| 字宽 ≠ wcwidth × 格宽就缩放 | 单格 600、双格 1200 units，分毫不差；wcwidth 用 Termux 自己的表（从 APK 字节码解出），不用 Python/系统的 Unicode 表 |
+| 字宽 ≠ wcwidth × 格宽就缩放 | 单格 600 units；wcwidth 用 Termux 自己的表（从 APK 字节码解出），不用 Python/系统的 Unicode 表 |
+| Android 默认开 hinting，每个字形的宽度各自取整到整像素（37 号列宽 22px 而非 22.2px），双格字 `round(1.2em)` 常比两个单格差 1px | 双格字经 GSUB 拆成"单格字形 + 单格空白"，量出来总是恰好两格；方块元素右边多伸出 30 units，盖住列宽向上取整留下的竖缝 |
 | FreeType 按 `hmtx.lsb` 定位绘制起点 | 合入和改动过的字形 lsb 一律等于真实 xMin，否则窄标点会贴到格子左边 |
 | 行距（leading）整块放在行底 | lineGap 为 0，行距全部放进 ascent/descent，文字在行内垂直居中 |
-| 行高向上取整（`ceil`） | 制表符、方块、Powerline 分隔符上下各超出行高 20 units，行与行之间不留缝 |
+| 行高向上取整（`ceil`） | 制表符、方块、Powerline 分隔符上下各超出行高 20 units，制表符和方块的底边再多伸出 40 units，行与行之间不留缝 |
 | 只加载一个 `font.ttf`，粗体用 `setFakeBoldText` 描边、斜体用错切 | 没法提供真正的粗体/斜体——这是 app 的限制 |
+
+方块、制表符和中文宽度都用 `tools/android_check.py` 在真机渲染器上逐个字号验证过：14–60 号里，只有最小的 14 号行与行之间还有一条很淡的线。
 
 ## 规格
 
@@ -43,7 +46,7 @@ Termux 的 `TerminalRenderer` 逐字测量宽度，和 `wcwidth` 算出的格数
 | 中日韩 | 更纱黑体 Term SC v1.0.40 Regular，放大 1.1 倍、居中于两格；缺的边角区（谚文兼容字母、注音扩展、扩展 B 等）取系统 Noto Sans CJK SC（同为思源黑体字形） |
 | 符号 | DejaVu Sans Mono 优先，其次 Noto Sans Symbols 2、Noto Sans Symbols、DejaVu Sans、系统 Noto Symbols |
 | 度量 | 1000 units/em，单格 600，ascent 1090 / descent −340 / lineGap 0（行高 1.43em） |
-| 规模 | 57,510 个字形，15.5MB |
+| 规模 | 57,511 个字形，15.8MB |
 
 ## 自己构建和调参
 
@@ -60,7 +63,7 @@ python3 build/build.py        # 从源字体构建，覆盖根目录的 SourceCo
 |---|---|---|
 | `build/step1_merge_cjk.py` | 把更纱的中日韩字形合进 Source Code Pro | `SCALE` 中文放大倍数、`ADVANCE` 双格宽 |
 | `build/step2_ui_symbols.py` | 补 Claude Code 等 TUI 常用的 20 个 UI 符号 | `NEED`、`TARGET_W` / `TARGET_H` |
-| `build/step3_termux_fit.py` | 行高、铺满类字形拉伸、宽度对齐 wcwidth、整块补符号和 CJK 边角字 | `ASC` / `DESC`（行高 = ASC − DESC）、`OVERLAP`、`SYM_W` / `SYM_H` |
+| `build/step3_termux_fit.py` | 行高、铺满类字形拉伸和外扩、宽度对齐 wcwidth、整块补符号和 CJK 边角字、双格字拆分 | `ASC` / `DESC`（行高 = ASC − DESC）、`OVERLAP`、`BOTTOM_EXTRA`、`BLOCK_BLEED`、`SYM_W` / `SYM_H` |
 
 调参时先离线预览，不用反复重启 Termux（预览需要 `pip install pillow`）：
 
@@ -68,6 +71,14 @@ python3 build/build.py        # 从源字体构建，覆盖根目录的 SourceCo
 python3 build/build.py -o $TMPDIR/test.ttf
 python3 tools/preview.py ~/storage/downloads/cmp.png ~/.termux/font.ttf $TMPDIR/test.ttf --labels 当前,试验
 ```
+
+预览是用 Pillow 模拟的。要看手机上真实渲染器的结果（方块和制表符有没有缝、中文是不是恰好两格），直接在手机上跑：
+
+```bash
+python3 tools/android_check.py ~/.termux/font.ttf $TMPDIR/test.ttf --labels 当前,试验 --png $TMPDIR/check
+```
+
+它用 `app_process` 调用 Android 自己的文字渲染，按 TerminalRenderer 的方式排版，逐个字号（默认 14–60）报告问题；`--png` 另存每个字号的 Claude Code 开屏形象和中英混排样例。仓库里带着编好的 `tools/android_render/probe.dex`，改了 `Probe.java` 才需要用 `build.sh` 重新编译（要 JDK 和 Android SDK）。
 
 满意后运行 `python3 build/build.py` 输出到根目录，再 `./install.sh`。字体有改动时，把 `build/build.py` 里的 `FONT_TIMESTAMP` 改成当天，并在 [CHANGELOG](CHANGELOG.md) 记一笔。
 
@@ -80,7 +91,9 @@ python3 tools/preview.py ~/storage/downloads/cmp.png ~/.termux/font.ttf $TMPDIR/
 SourceCodeProNerdMono-CJK.ttf  成品字体
 install.sh                     一键安装
 build/                         构建流水线，入口 build.py
-tools/preview.py               按 Termux 排版逻辑离线渲染对比图
+tools/preview.py               按 Termux 排版逻辑离线渲染对比图（Pillow 模拟）
+tools/android_check.py         用手机上真实的渲染器逐个字号检查缝隙和中文宽度
+tools/android_render/          android_check 调用的 Java 程序（源码、编好的 dex、编译脚本）
 tools/extract_wcwidth.py       从 Termux APK 提取 wcwidth 表
 assets/demo.png                演示图
 CHANGELOG.md                   版本历史

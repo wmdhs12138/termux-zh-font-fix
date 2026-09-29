@@ -2,8 +2,10 @@
 
 模拟要点（与 termux-app 源码一致）：
   行高 = ceil(ascent - descent + lineGap)，基线 = 行顶 + |ceil(ascent)|，leading 落在行底
-  列宽 = measureText("X")
+  列宽 = measureText("X")；Android 默认开 hinting，每个字形的 advance 各自取整到整像素
+  （本字体的双格字形经 GSUB 拆成 单格字形 + 单格空白，宽度按两个取整后的单格算）
   字宽 ≠ wcwidth×列宽（误差 >1%）时整字横向缩放到 wcwidth 格
+这里只是模拟；要看真机渲染器的实际结果（方块缝隙、中文宽度），用 tools/android_check.py。
   字体里没有的字按 cmap 走系统回退：Noto Sans CJK SC → Noto Symbols 子集；
   emoji 交给 NotoColorEmoji（COLRv1，Pillow 画不了，用黄色圆块占位，宽度按真实 advance）
 
@@ -20,6 +22,7 @@ from fontTools.ttLib import TTFont
 from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "build"))
+from step3_termux_fit import CELL, split_glyphs  # noqa: E402
 from termux_wcwidth import wcwidth  # noqa: E402
 
 COLS = 40
@@ -82,11 +85,17 @@ class Face:
         self.upem, self.size = upem, size
         self.line = math.ceil((asc - desc + gap) * size / upem)
         self.base = -math.ceil(-asc * size / upem)
-        self.col = self.hmtx[self.cmap[ord("X")]][0] * size / upem
+        self.split = split_glyphs(tt)
+        self.col = self.px(self.hmtx[self.cmap[ord("X")]][0])
         self.pil = ImageFont.truetype(path, size)
 
+    def px(self, units):
+        """advance 换算成像素并四舍五入到整数，与真机 hinting 后的结果一致"""
+        return math.floor(units * self.size / self.upem + 0.5)
+
     def advance(self, ch):
-        return self.hmtx[self.cmap[ord(ch)]][0] * self.size / self.upem
+        name = self.cmap[ord(ch)]
+        return self.px(self.hmtx[name][0]) + (self.px(CELL) if name in self.split else 0)
 
 
 class Fallback:
@@ -102,7 +111,7 @@ class Fallback:
             self.chain.append((tt.getBestCmap(), ImageFont.truetype(path, size, index=idx)))
         emoji = TTFont(self.EMOJI, lazy=True)
         self.emoji_cmap = emoji.getBestCmap()
-        self.emoji_adv = emoji["hmtx"][self.emoji_cmap[0x1F600]][0] / emoji["head"].unitsPerEm * size
+        self.emoji_adv = round(emoji["hmtx"][self.emoji_cmap[0x1F600]][0] / emoji["head"].unitsPerEm * size)
 
     def font_for(self, ch):
         if wcwidth(ord(ch)) == 2 and ord(ch) in self.emoji_cmap:
@@ -114,7 +123,7 @@ def glyph_image(face, fb, ch, fg, frac):
     """返回 (RGBA 图, 实测宽度, 字形原点在图中的 x)；frac 是列坐标的小数部分，保留亚像素定位"""
     pad = face.size
     font = face.pil if ord(ch) in face.cmap else fb.font_for(ch)
-    w = face.advance(ch) if font is face.pil else (fb.emoji_adv if font is None else font.getlength(ch))
+    w = face.advance(ch) if font is face.pil else (fb.emoji_adv if font is None else round(font.getlength(ch)))
     img = Image.new("RGBA", (int(w) + 2 * pad, face.line + 2 * pad), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     if font is None:
